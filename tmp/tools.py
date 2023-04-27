@@ -35,8 +35,10 @@ def te_linear_withparams(X: te.Tensor, params: dict) -> te.Tensor:
     res = topi.add(Y, params["b"])
     return res
 
-def rx_linear():
-    return
+def rx_linear(X: rx.Expr, W: rx.Expr, B: rx.Expr) -> rx.Expr:
+    Y = relax.nn.dense(X, W)
+    res = relax.op.add(Y, B)
+    return res
 
 def te_layernorm(X: te.Tensor, gamma: te.Tensor, beta: te.Tensor):
     out = topi.nn.layer_norm(X, gamma, beta, axis=[-1])
@@ -279,17 +281,21 @@ def test_rx_call_te_linear():
     X = rx.Var("x", (10, 20), rx.DynTensorType(2, "float32"))
     W = rx.Var("w", (20, 30), rx.DynTensorType(2, "float32"))
     B = rx.Var("b", (30, ), rx.DynTensorType(1, "float32"))
+    W2 = rx.Var("w2", (40, 30), rx.DynTensorType(2, "float32"))
+    B2 = rx.Var("b2", (40, ), rx.DynTensorType(1, "float32"))
 
     params = {
         "w": W, "b": B
     }
 
-    fn_inputs = [X, params["w"], params["b"]]
+    fn_inputs = [X, params["w"], params["b"], W2, B2]
     fn_output = None
     with bb.function("test_te_linear_withparams"):
         with bb.dataflow():
             output = bb.emit_te(te_linear_withparams, X, params)
-            fn_output = bb.emit_output(output)
+            print(output.shape)
+            output2 = bb.emit(rx_linear(output, W2, B2))
+            fn_output = bb.emit_output(output2)
         bb.emit_func_output(fn_output, fn_inputs)
     bb.get()
 
