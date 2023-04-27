@@ -63,16 +63,17 @@ def masked_softmax(x_shape: R.Shape, valid_shape: R.Shape):
         bb.emit_func_output(fn_output, fn_inputs)
     return bb.get()
 
-def positivewise_ffn(batch_num = 10, ffn_input = 20, ffn_hidden = 30, ffn_output = 40):
+def positivewise_ffn(batch_num = 10, seq_num = 100, 
+        ffn_input = 20, ffn_hidden = 30, ffn_output = 40):
     bb = rx.BlockBuilder()
 
     # construct x and params 
-    x = rx.Var("x", [batch_num, ffn_input], rx.DynTensorType(2, "float32"))
-    w0 = rx.Var("w0", [ffn_input, ffn_hidden], rx.DynTensorType(2, "float32"))
-    b0 = rx.Var("b0", [ffn_hidden, ], rx.DynTensorType(1, "float32"))
+    x = rx.Var("x", [batch_num, seq_num, ffn_input], rx.DynTensorType(3, "float32"))
+    w0 = rx.Var("w0", [batch_num, ffn_hidden, ffn_input], rx.DynTensorType(3, "float32"))
+    b0 = rx.Var("b0", [seq_num, ffn_hidden], rx.DynTensorType(2, "float32"))
 
-    w1 = rx.Var("w1", [ffn_hidden, ffn_output], rx.DynTensorType(2, "float32"))
-    b1 = rx.Var("b1", [ffn_output, ], rx.DynTensorType(1, "float32"))
+    w1 = rx.Var("w1", [batch_num, ffn_output, ffn_hidden], rx.DynTensorType(3, "float32"))
+    b1 = rx.Var("b1", [seq_num, ffn_output], rx.DynTensorType(2, "float32"))
 
     # relax function def 
     fn_inputs = [x, w0, b0, w1, b1]
@@ -297,17 +298,15 @@ def test_masked_softmax():
     masked_softmax((10, 100, 50), (10, 100))
 
 def test_positivewise_ffn():
-    batch_num, ffn_input, ffn_hidden, ffn_output=10, 20, 30, 40
+    batch_num, seq_num, ffn_input, ffn_hidden, ffn_output=10, 100, 20, 30, 40
     ffn_params = {
-        "w0": tvm.nd.array(torch.rand(ffn_input, ffn_hidden).numpy()),
-        "b0": tvm.nd.array(torch.rand(ffn_hidden).numpy()),
-        "z0": tvm.nd.array(torch.rand(batch_num, ffn_hidden).numpy()),
-        "w1": tvm.nd.array(torch.rand(ffn_hidden, ffn_output).numpy()),
-        "b1": tvm.nd.array(torch.rand(ffn_output).numpy()),
-        "z1": tvm.nd.array(torch.rand(batch_num, ffn_output).numpy()),
+        "w0": tvm.nd.array(torch.rand(batch_num, ffn_hidden, ffn_input).numpy()),
+        "b0": tvm.nd.array(torch.rand(seq_num, ffn_hidden).numpy()),
+        "w1": tvm.nd.array(torch.rand(batch_num, ffn_output, ffn_hidden).numpy()),
+        "b1": tvm.nd.array(torch.rand(seq_num, ffn_output).numpy()),
     }
 
-    ffn_mod = positivewise_ffn(batch_num=10, ffn_input=20, ffn_hidden=30, ffn_output=40)
+    ffn_mod = positivewise_ffn(batch_num, seq_num, ffn_input, ffn_hidden, ffn_output)
     ffn_mod_with_params = relax.transform.BindParams("positivewise_ffn", ffn_params)(ffn_mod)
 
 def test_addnorm():
