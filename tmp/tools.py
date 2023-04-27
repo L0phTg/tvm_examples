@@ -70,20 +70,18 @@ def positivewise_ffn(batch_num = 10, ffn_input = 20, ffn_hidden = 30, ffn_output
     x = rx.Var("x", [batch_num, ffn_input], rx.DynTensorType(2, "float32"))
     w0 = rx.Var("w0", [ffn_input, ffn_hidden], rx.DynTensorType(2, "float32"))
     b0 = rx.Var("b0", [ffn_hidden, ], rx.DynTensorType(1, "float32"))
-    z0 = rx.Var("z0", [batch_num, ffn_hidden], rx.DynTensorType(2, "float32"))
 
     w1 = rx.Var("w1", [ffn_hidden, ffn_output], rx.DynTensorType(2, "float32"))
     b1 = rx.Var("b1", [ffn_output, ], rx.DynTensorType(1, "float32"))
-    z1 = rx.Var("z1", [batch_num, ffn_output], rx.DynTensorType(2, "float32"))
 
     # relax function def 
-    fn_inputs = [x, w0, b0, z0, w1, b1, z1]
+    fn_inputs = [x, w0, b0, w1, b1]
     fn_output = None
     with bb.function("positivewise_ffn"):
         with bb.dataflow():
-            lv0 = bb.emit_te(te_linear, x, w0, b0, z0)
+            lv0 = bb.emit_te(te_linear, x, w0, b0)
             lv1 = bb.emit_te(topi.nn.relu, lv0)
-            output = bb.emit_te(te_linear, lv1, w1, b1, z1)
+            output = bb.emit_te(te_linear, lv1, w1, b1)
             fn_output = bb.emit_output(output)
         bb.emit_func_output(fn_output, fn_inputs)
     return bb.get()
@@ -187,10 +185,28 @@ def dotproduct_attention(
 def multihead_attention(
             batch_size, query_size, kv_size, 
             dim = 100, value_dim = 200,
-            num_hiddens = 300, num_heads = 2,
-            params: dict = None
+            num_hiddens = 300, num_heads = 2
     ):
     bb = rx.BlockBuilder()
+    # 权重
+    params = {
+        "linear_wq" : {
+            "w": rx.Var("q_w", (batch_size, num_hiddens, dim), R.Tensor),
+            "b": rx.Var("q_b", (query_size, num_hiddens), R.Tensor),
+        },
+        "linear_wk" : {
+            "w": rx.Var("k_w", (batch_size, num_hiddens, dim), R.Tensor),
+            "b": rx.Var("k_b", (kv_size, num_hiddens), R.Tensor)
+        },
+        "linear_wv" : {
+            "w": rx.Var("v_w", (batch_size, num_hiddens, value_dim), R.Tensor),
+            "b": rx.Var("v_b", (kv_size, num_hiddens), R.Tensor)
+        },
+        "linear_wo" : {
+            "w": rx.Var("o_w", (batch_size, num_hiddens, num_hiddens), R.Tensor),
+            "b": rx.Var("o_b", (query_size, num_hiddens), R.Tensor)
+        }
+    }
     # add functions
     transpose_q_mod = transpose_qkv(batch_size, query_size, num_hiddens, num_heads)
     transpose_kv_mod = transpose_qkv(batch_size, kv_size, num_hiddens, num_heads)
@@ -244,16 +260,15 @@ def test_te_linear():
     X = te.placeholder((10, 20), dtype="float32")
     W = te.placeholder((20, 30), dtype="float32")
     B = te.placeholder((30, ), dtype="float32")
-    Z = te.placeholder((10, 30), dtype="float32")
 
-    Y = te_linear(X, W, B, Z)
-    linear_mod = te.create_prim_func([X, W, B, Z, Y])
+    Y = te_linear(X, W, B)
+    linear_mod = te.create_prim_func([X, W, B, Y])
 
     ### use params
     params = {
-        "w": W, "b": B, "z": Z
+        "w": W, "b": B
     }
-    Y_1 = te_linear(X, params["w"], params["b"], params["z"])
+    Y_1 = te_linear(X, params["w"], params["b"])
     Y_2 = te_linear_withparams(X, params=params)
 
 def test_rx_call_te_linear():
@@ -315,31 +330,11 @@ def test_multihead_attention():
     batch_size, query_size, kv_size = 10, 40, 50
     dim, value_dim = 100, 200
     num_hiddens, num_heads = 300, 2
-    # 权重
-    te_params = {
-        "linear_wq" : {
-            "w": rx.Var("q_w", (batch_size, num_hiddens, dim), R.Tensor),
-            "b": rx.Var("q_b", (query_size, num_hiddens), R.Tensor),
-        },
-        "linear_wk" : {
-            "w": rx.Var("k_w", (batch_size, num_hiddens, dim), R.Tensor),
-            "b": rx.Var("k_b", (kv_size, num_hiddens), R.Tensor)
-        },
-        "linear_wv" : {
-            "w": rx.Var("v_w", (batch_size, num_hiddens, value_dim), R.Tensor),
-            "b": rx.Var("v_b", (kv_size, num_hiddens), R.Tensor)
-        },
-        "linear_wo" : {
-            "w": rx.Var("o_w", (batch_size, num_hiddens, num_hiddens), R.Tensor),
-            "b": rx.Var("o_b", (query_size, num_hiddens), R.Tensor)
-        }
-    }
 
     multihead_attention_mod = multihead_attention(
         batch_size, query_size, kv_size,
         dim, value_dim,
-        num_hiddens=num_hiddens, num_heads=num_heads,
-        params=te_params
+        num_hiddens=num_hiddens, num_heads=num_heads
     )
     # 参数绑定
     
