@@ -21,9 +21,9 @@ import math
 # 支持二维矩阵乘/三维矩阵乘
 def te_linear(X: te.Tensor, W: te.Tensor, B: te.Tensor) -> te.Tensor:
     if len(X.shape) == 2:
-        Y = topi.nn.matmul(X, W)
+        Y = topi.nn.matmul(X, W)       # transpose_b=False
     elif len(X.shape) == 3:
-        Y = topi.nn.batch_matmul(X, W)
+        Y = topi.nn.batch_matmul(X, W) # transpose_b=True
     res = topi.add(Y, B)
     return res
 
