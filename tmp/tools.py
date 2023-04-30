@@ -102,8 +102,10 @@ def addnorm(x_shape):
     fn_output = None
     with bb.function("addnorm"):
         with bb.dataflow():
+            # lv0,lv1: batch_size, seq_num, dim
             lv0 = bb.emit(R.TupleGetItem(rx.nn.dropout(x), 1))
             lv1 = bb.emit_te(topi.add, lv0, x)
+            # 
             output = bb.emit_te(te_layernorm, lv1, gamma, beta)
             fn_output = bb.emit_output(output)
         bb.emit_func_output(fn_output, fn_inputs)
@@ -210,18 +212,19 @@ def multihead_attention(
             "b": rx.Var("o_b", (query_size, num_hiddens), R.Tensor)
         }
     }
+    cur_func_name = "multihead_attention"
     # add functions
     transpose_q_mod = transpose_qkv(batch_size, query_size, num_hiddens, num_heads)
     transpose_kv_mod = transpose_qkv(batch_size, kv_size, num_hiddens, num_heads)
     transpose_output_mod = transpose_output(x_shape=(batch_size*num_heads, query_size, int(num_hiddens/num_heads)), num_heads=num_heads)
     dot_attention_mod = dotproduct_attention(batch_size*num_heads, query_size, kv_size, int(num_hiddens/num_heads), int(num_hiddens/num_heads))
     
-    transpose_q_var = bb.add_func(transpose_q_mod["transpose_qkv"], "transpose_q")
-    transpose_kv_var = bb.add_func(transpose_kv_mod["transpose_qkv"], "transpose_kv")
-    transpose_output_var = bb.add_func(transpose_output_mod["transpose_output"], "transpose_output")
+    transpose_q_var = bb.add_func(transpose_q_mod["transpose_qkv"], cur_func_name+"__transpose_q")
+    transpose_kv_var = bb.add_func(transpose_kv_mod["transpose_qkv"], cur_func_name+"__transpose_kv")
+    transpose_output_var = bb.add_func(transpose_output_mod["transpose_output"], cur_func_name+"__transpose_output")
     for func_name in dot_attention_mod.global_var_map_:
-        bb.add_func(dot_attention_mod[func_name], func_name)
-    dot_attention_var = bb.get().get_global_var("dotproduct_attention")
+        bb.add_func(dot_attention_mod[func_name], cur_func_name+"__"+func_name)
+    dot_attention_var = bb.get().get_global_var(cur_func_name+"__dotproduct_attention")
 
     # construct x and params
     queries = rx.Var("queries", [batch_size, query_size, dim], rx.DynTensorType(3, "float32"))
