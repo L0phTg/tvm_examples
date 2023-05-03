@@ -36,7 +36,7 @@ def te_linear_withparams(X: te.Tensor, params: dict) -> te.Tensor:
     return res
 
 def rx_linear(X: rx.Expr, W: rx.Expr, B: rx.Expr) -> rx.Expr:
-    Y = relax.nn.dense(X, W)
+    Y = relax.op.matmul(X, W) # # transpose_b=False
     res = relax.op.add(Y, B)
     return res
 
@@ -48,8 +48,8 @@ def masked_softmax(x_shape: R.Shape, valid_shape: R.Shape):
     bb = rx.BlockBuilder()
 
     # construct params and x 
-    x = rx.Var("x", x_shape, rx.DynTensorType(len(x_shape), "float32"))
-    valid_lens = rx.Var("valid_lens", valid_shape, rx.DynTensorType(len(valid_shape), "int64"))
+    x = rx.Var("x", rx.TensorStructInfo(x_shape, "float32"))
+    valid_lens = rx.Var("valid_lens", rx.TensorStructInfo(valid_shape, "int64"))
 
     # relax function def 
     fn_inputs = [x, valid_lens]
@@ -58,9 +58,9 @@ def masked_softmax(x_shape: R.Shape, valid_shape: R.Shape):
         with bb.dataflow():
             lv0 = bb.emit(rx.op.reshape(x, (-1, x_shape[2])))
             if (len(valid_shape) == 2):
-                valid_lens_reshape = bb.emit(rx.op.reshape(valid_lens, (-1)))
+                valid_lens_reshape = bb.emit(rx.op.reshape(valid_lens, (-1, )))
             lv1 = bb.emit_te(topi.sequence_mask, lv0, valid_lens_reshape, -1e6, 1)
-            output = bb.emit(rx.nn.softmax(R.reshape(lv1, x_shape), axis=-1))
+            output = bb.emit(rx.op.nn.softmax(R.reshape(lv1, x_shape), axis=-1))
             fn_output = bb.emit_output(output)
         bb.emit_func_output(fn_output, fn_inputs)
     return bb.get()
@@ -70,12 +70,12 @@ def positivewise_ffn(batch_num = 10, seq_num = 100,
     bb = rx.BlockBuilder()
 
     # construct x and params 
-    x = rx.Var("x", [batch_num, seq_num, ffn_input], rx.DynTensorType(3, "float32"))
-    w0 = rx.Var("w0", [batch_num, ffn_hidden, ffn_input], rx.DynTensorType(3, "float32"))
-    b0 = rx.Var("b0", [seq_num, ffn_hidden], rx.DynTensorType(2, "float32"))
+    x = rx.Var("x", rx.TensorStructInfo([batch_num, seq_num, ffn_input], "float32"))
+    w0 = rx.Var("w0", rx.TensorStructInfo([batch_num, ffn_hidden, ffn_input], "float32"))
+    b0 = rx.Var("b0", rx.TensorStructInfo([seq_num, ffn_hidden], "float32"))
 
-    w1 = rx.Var("w1", [batch_num, ffn_output, ffn_hidden], rx.DynTensorType(3, "float32"))
-    b1 = rx.Var("b1", [seq_num, ffn_output], rx.DynTensorType(2, "float32"))
+    w1 = rx.Var("w1", rx.TensorStructInfo([batch_num, ffn_output, ffn_hidden], "float32"))
+    b1 = rx.Var("b1", rx.TensorStructInfo([seq_num, ffn_output], "float32"))
 
     # relax function def 
     fn_inputs = [x, w0, b0, w1, b1]
@@ -93,9 +93,9 @@ def addnorm(x_shape):
     bb = rx.BlockBuilder()
 
     # construct x and params 
-    x = rx.Var("x", x_shape, rx.DynTensorType(len(x_shape), "float32"))
-    gamma = rx.Var("gamma", [x_shape[-1]], rx.DynTensorType(1, "float32"))
-    beta = rx.Var("beta", [x_shape[-1]], rx.DynTensorType(1, "float32"))
+    x = rx.Var("x", rx.TensorStructInfo(x_shape, "float32"))
+    gamma = rx.Var("gamma", rx.TensorStructInfo([x_shape[-1]], "float32"))
+    beta = rx.Var("beta", rx.TensorStructInfo([x_shape[-1]], "float32"))
 
     # relax function def 
     fn_inputs = [x, gamma, beta]
@@ -115,8 +115,7 @@ def transpose_qkv(batch_size, qkv_nums, num_hiddens=768, num_heads=2):
     bb = rx.BlockBuilder()
 
     # construct params and x 
-    type_anno = rx.DynTensorType(3, "float32")
-    x = rx.Var("x", [batch_size, qkv_nums, num_hiddens], type_anno)
+    x = rx.Var("x", rx.TensorStructInfo([batch_size, qkv_nums, num_hiddens], "float32"))
 
     # relax function def 
     fn_inputs = [x]
@@ -124,8 +123,8 @@ def transpose_qkv(batch_size, qkv_nums, num_hiddens=768, num_heads=2):
     with bb.function("transpose_qkv"):
         with bb.dataflow():
             lv0 = bb.emit(rx.op.reshape(x, (batch_size, qkv_nums, num_heads, -1)))
-            lv1 = bb.emit(rx.op.transpose(lv0, (0, 2, 1, 3)))
-            output = bb.emit(rx.op.reshape(lv1, (-1, lv1.shape[2], lv1.shape[3])))
+            lv1 = bb.emit(rx.op.permute_dims(lv0, (0, 2, 1, 3)))
+            output = bb.emit(rx.op.reshape(lv1, (-1, lv1.struct_info.shape[2], lv1.struct_info.shape[3])))
             fn_output = bb.emit_output(output)
         bb.emit_func_output(fn_output, fn_inputs)
     return bb.get()
@@ -134,17 +133,16 @@ def transpose_output(x_shape: R.Shape, num_heads=2):
     bb = rx.BlockBuilder()
     
     # construct params and x 
-    type_anno = rx.DynTensorType(3, "float32")    
-    x = rx.Var("x", x_shape, type_anno)
+    x = rx.Var("x", rx.TensorStructInfo(x_shape, "float32"))
 
     # relax function def
     fn_inputs = [x]
     fn_output = None
     with bb.function("transpose_output"):
         with bb.dataflow():
-            lv0 = bb.emit(rx.op.reshape(x, (-1, num_heads, x.shape[1], x.shape[2])))
-            lv1 = bb.emit(rx.op.transpose(lv0, (0, 2, 1, 3)))
-            output = bb.emit(rx.op.reshape(lv1, (lv1.shape[0], lv1.shape[1], -1)))
+            lv0 = bb.emit(rx.op.reshape(x, (-1, num_heads, x.struct_info.shape[1], x.struct_info.shape[2])))
+            lv1 = bb.emit(rx.op.permute_dims(lv0, (0, 2, 1, 3)))
+            output = bb.emit(rx.op.reshape(lv1, (lv1.struct_info.shape[0], lv1.struct_info.shape[1], -1)))
             fn_output = bb.emit_output(output)
         bb.emit_func_output(fn_output, fn_inputs)
     return bb.get()
@@ -164,10 +162,10 @@ def dotproduct_attention(
     rx_masked_softmax = bb.add_func(mask_softmax_mod["masked_softmax"], "masked_softmax")
 
     # construct params and x 
-    queries = rx.Var("queries", [batch_size, query_size, dim], rx.DynTensorType(3, "float32"))
-    keys = rx.Var("keys", [batch_size, kv_size, dim], rx.DynTensorType(3, "float32"))
-    values = rx.Var("values", [batch_size, kv_size, value_dim], rx.DynTensorType(3, "float32"))
-    valid_lens = rx.Var("valid_lens", [batch_size, query_size], rx.DynTensorType(2, "int64"))
+    queries = rx.Var("queries", rx.TensorStructInfo([batch_size, query_size, dim], "float32"))
+    keys = rx.Var("keys", rx.TensorStructInfo([batch_size, kv_size, dim], "float32"))
+    values = rx.Var("values", rx.TensorStructInfo([batch_size, kv_size, value_dim], "float32"))
+    valid_lens = rx.Var("valid_lens", rx.TensorStructInfo([batch_size, query_size], "int64"))
     
     # relax function def
     fn_inputs = [queries, keys, values, valid_lens]
@@ -196,20 +194,20 @@ def multihead_attention(
     # 权重
     params = {
         "linear_wq" : {
-            "w": rx.Var("q_w", (batch_size, num_hiddens, dim), R.Tensor),
-            "b": rx.Var("q_b", (query_size, num_hiddens), R.Tensor),
+            "w": rx.Var("q_w", rx.TensorStructInfo((batch_size, num_hiddens, dim), "float32")),
+            "b": rx.Var("q_b", rx.TensorStructInfo((query_size, num_hiddens), "float32")),
         },
         "linear_wk" : {
-            "w": rx.Var("k_w", (batch_size, num_hiddens, dim), R.Tensor),
-            "b": rx.Var("k_b", (kv_size, num_hiddens), R.Tensor)
+            "w": rx.Var("k_w", rx.TensorStructInfo((batch_size, num_hiddens, dim), "float32")),
+            "b": rx.Var("k_b", rx.TensorStructInfo((kv_size, num_hiddens), "float32"))
         },
         "linear_wv" : {
-            "w": rx.Var("v_w", (batch_size, num_hiddens, value_dim), R.Tensor),
-            "b": rx.Var("v_b", (kv_size, num_hiddens), R.Tensor)
+            "w": rx.Var("v_w", rx.TensorStructInfo((batch_size, num_hiddens, value_dim), "float32")),
+            "b": rx.Var("v_b", rx.TensorStructInfo((kv_size, num_hiddens), "float32"))
         },
         "linear_wo" : {
-            "w": rx.Var("o_w", (batch_size, num_hiddens, num_hiddens), R.Tensor),
-            "b": rx.Var("o_b", (query_size, num_hiddens), R.Tensor)
+            "w": rx.Var("o_w", rx.TensorStructInfo((batch_size, num_hiddens, num_hiddens), "float32")),
+            "b": rx.Var("o_b", rx.TensorStructInfo((query_size, num_hiddens), "float32"))
         }
     }
     cur_func_name = "multihead_attention"
@@ -227,10 +225,10 @@ def multihead_attention(
     dot_attention_var = bb.get().get_global_var(cur_func_name+"__dotproduct_attention")
 
     # construct x and params
-    queries = rx.Var("queries", [batch_size, query_size, dim], rx.DynTensorType(3, "float32"))
-    keys = rx.Var("keys", [batch_size, kv_size, dim], rx.DynTensorType(3, "float32"))
-    values = rx.Var("values", [batch_size, kv_size, value_dim], rx.DynTensorType(3, "float32"))
-    valid_lens = rx.Var("valid_lens", [batch_size, query_size], rx.DynTensorType(2, "int64"))
+    queries = rx.Var("queries", rx.TensorStructInfo([batch_size, query_size, dim], "float32"))
+    keys = rx.Var("keys", rx.TensorStructInfo([batch_size, kv_size, dim], "float32"))
+    values = rx.Var("values", rx.TensorStructInfo([batch_size, kv_size, value_dim], "float32"))
+    valid_lens = rx.Var("valid_lens", rx.TensorStructInfo([batch_size*num_heads, query_size], "int64"))
  
     # relax function def
     ext_params = [var for k in params.keys() for var in params[k].values()]
@@ -281,11 +279,11 @@ def test_rx_call_te_linear():
     # 2 维
     bb = rx.BlockBuilder()
 
-    X = rx.Var("x", (10, 20), rx.DynTensorType(2, "float32"))
-    W = rx.Var("w", (20, 30), rx.DynTensorType(2, "float32"))
-    B = rx.Var("b", (30, ), rx.DynTensorType(1, "float32"))
-    W2 = rx.Var("w2", (40, 30), rx.DynTensorType(2, "float32"))
-    B2 = rx.Var("b2", (40, ), rx.DynTensorType(1, "float32"))
+    X = rx.Var("x", rx.TensorStructInfo((10, 20), "float32"))
+    W = rx.Var("w", rx.TensorStructInfo((20, 30), "float32"))
+    B = rx.Var("b", rx.TensorStructInfo((30, ), "float32"))
+    W2 = rx.Var("w2", rx.TensorStructInfo((30, 40), "float32"))
+    B2 = rx.Var("b2", rx.TensorStructInfo((40, ), "float32"))
 
     params = {
         "w": W, "b": B
@@ -296,7 +294,7 @@ def test_rx_call_te_linear():
     with bb.function("test_te_linear_withparams"):
         with bb.dataflow():
             output = bb.emit_te(te_linear_withparams, X, params)
-            print(output.shape)
+            # print(output.struct_info.shape)
             output2 = bb.emit(rx_linear(output, W2, B2))
             fn_output = bb.emit_output(output2)
         bb.emit_func_output(fn_output, fn_inputs)
